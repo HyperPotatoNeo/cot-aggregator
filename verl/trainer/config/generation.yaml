@@ -14,7 +14,6 @@ model:
   path: ~/models/Qwen2-7B-Instruct
   external_lib: null
 rollout:
-  _target_: verl.workers.config.RolloutConfig
   name: vllm
   mode: sync # sync: LLM, async: AsyncLLM
   temperature: 1.0

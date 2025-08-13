@@ -19,7 +19,6 @@ from omegaconf import MISSING
 
 from verl.base_config import BaseConfig
 from verl.trainer.config import CheckpointConfig
-from verl.utils.profiler.config import ProfilerConfig
 
 from .engine import FSDPEngineConfig, McoreEngineConfig
 from .optimizer import OptimizerConfig
@@ -110,7 +109,6 @@ class ActorConfig(BaseConfig):
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     optim: OptimizerConfig = field(default_factory=OptimizerConfig)
     use_fused_kernels: bool = False
-    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
     def __post_init__(self):
         """Validate actor configuration parameters."""
@@ -220,7 +218,6 @@ class FSDPActorConfig(ActorConfig):
     entropy_checkpointing: bool = False
     fsdp_config: FSDPEngineConfig = field(default_factory=FSDPEngineConfig)
     use_remove_padding: bool = False
-    profiler: ProfilerConfig = field(default_factory=ProfilerConfig)
 
     def __post_init__(self):
         """Validate FSDP actor configuration parameters."""

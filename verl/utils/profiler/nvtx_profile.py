@@ -20,7 +20,6 @@ from typing import Callable, Optional
 import nvtx
 import torch
 
-from .config import NsightToolConfig
 from .profile import DistProfiler, ProfilerConfig
 
 
@@ -114,7 +113,7 @@ def marked_timer(
 class NsightSystemsProfiler(DistProfiler):
     """Nsight system profiler. Installed in a worker to control the Nsight system profiler."""
 
-    def __init__(self, rank: int, config: Optional[ProfilerConfig], tool_config: Optional[NsightToolConfig], **kwargs):
+    def __init__(self, rank: int, config: Optional[ProfilerConfig], **kwargs):
         """Initialize the NsightSystemsProfiler.
 
         Args:
@@ -124,13 +123,8 @@ class NsightSystemsProfiler(DistProfiler):
         # If no configuration is provided, create a default ProfilerConfig with an empty list of ranks
         if not config:
             config = ProfilerConfig(ranks=[])
-        if not tool_config:
-            assert not config.enable, "tool_config must be provided when profiler is enabled"
-        self.enable = config.enable
-        if not config.enable:
-            return
         self.this_step: bool = False
-        self.discrete: bool = tool_config.discrete
+        self.discrete: bool = config.discrete
         self.this_rank: bool = False
         if config.all_ranks:
             self.this_rank = True
@@ -138,13 +132,13 @@ class NsightSystemsProfiler(DistProfiler):
             self.this_rank = rank in config.ranks
 
     def start(self, **kwargs):
-        if self.enable and self.this_rank:
+        if self.this_rank:
             self.this_step = True
             if not self.discrete:
                 torch.cuda.profiler.start()
 
     def stop(self):
-        if self.enable and self.this_rank:
+        if self.this_rank:
             self.this_step = False
             if not self.discrete:
                 torch.cuda.profiler.stop()
@@ -176,9 +170,6 @@ class NsightSystemsProfiler(DistProfiler):
         def decorator(func):
             @functools.wraps(func)
             def wrapper(self, *args, **kwargs):
-                if not self.profiler.enable:
-                    return func(self, *args, **kwargs)
-
                 profile_name = message or func.__name__
 
                 if self.profiler.this_step:
