@@ -166,6 +166,7 @@ def run(
     # Save parquet
     os.makedirs(os.path.dirname(os.path.abspath(output_parquet)), exist_ok=True)
     df_out.to_parquet(output_parquet, index=False)
+    print("Saved aggregated proposals to:", output_parquet)
 
     # Summary
     print(json.dumps(
@@ -182,9 +183,9 @@ def run(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default="/pscratch/sd/s/siddart2/data/math/test_llama_K.parquet")
-    ap.add_argument("--output", default="/pscratch/sd/s/siddart2/data/math/test_llama_K_aggregated.parquet")
-    ap.add_argument("--model", default="meta-llama/Llama-3.2-3B-Instruct")
+    ap.add_argument("--input", default="/pscratch/sd/s/siddart2/data/math/llama_3_3b/baseline_test.parquet")
+    ap.add_argument("--output", default="/pscratch/sd/s/siddart2/data/math/llama_3_3b/baseline_agg_1_test.parquet")
+    ap.add_argument("--model", default="/pscratch/sd/s/siddart2/checkpoints/verl_rloo_example_gsm8k/llama_3b_base/baseline")
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument("--max-new-tokens", type=int, default=1024)
