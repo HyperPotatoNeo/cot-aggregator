@@ -161,7 +161,7 @@ def loop(
         n=1, temperature=temperature, max_tokens=max_new_tokens
     )
     
-    df = pd.read_parquet(seed_dataset)[:100]
+    df = pd.read_parquet(seed_dataset)
 
     base_structure = [
         {
