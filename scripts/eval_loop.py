@@ -58,7 +58,7 @@ def aggregate_prompt(question: str, candidate_answers: List[str]) -> str:
         "You are given a math problem and several candidate solutions. "
         "Some candidates may be incorrect or contain errors. "
         "Aggregate the useful ideas and produce a single, high-quality solution. "
-        "Be concise and correct; if candidates disagree, choose the correct path. "
+        "Reason carefully; if candidates disagree, choose the correct path. If all are incorrect, then attempt a different strategy."#"Be concise and correct; if candidates disagree, choose the correct path. "
         "End with the final result in \\boxed{{}}.\n"
     )
     parts.append("Problem:\n")
@@ -150,9 +150,7 @@ def run(
     sampling: SamplingParams,
     k: int,
     population: int,
-    data: List,
-    dataset_path: str,
-    output_path: str,
+    data: List
 ):
 
     requests, ground_truths = [], []
@@ -208,35 +206,75 @@ def loop(
     tp_size: int,
     dtype: str,
     seed: int,
+    num_seeds: int,
 ):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     llm = LLM(model=model_name, tensor_parallel_size=tp_size,
-              dtype=dtype, trust_remote_code=True, seed=seed)
+                  dtype=dtype, trust_remote_code=True, seed=seed)
     sampling = SamplingParams(
         n=1, temperature=temperature, max_tokens=max_new_tokens
     )
-    
     df = pd.read_parquet(seed_dataset)
-
-    base_structure = [
-        {
-            'orig_prompt': extract_question_from_prompt(row['prompt']),
-            'ground_truth': row['reward_model']['ground_truth'],
-            'candidates': None,
-        }
-        for _, row in df.iterrows()
-    ]
     
-    for loop in range(loops):
-        # df, metrics = run(None, None, None, k, df, seed_dataset, output_dir)
-        data, metrics = run(llm, tokenizer, sampling, k, population, base_structure, seed_dataset, output_dir)
-        print(metrics)
-        metrics_dict = json.loads(metrics)  # `metrics` is a JSON string from run(...)
-        metrics_dict["loop"] = loop         # helpful for plotting later
-        os.makedirs(os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population)), exist_ok=True)
-        metrics_path = os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population), f'eval_loop.json')
-        _append_metrics_to_json(metrics_path, metrics_dict)
-        print(f"Appended metrics for loop {loop} to {metrics_path}")
+    # --- seed aggregation (added) ---
+    acc_mean_acc_k = [[] for _ in range(loops)]
+    acc_mean_pass_at_k = [[] for _ in range(loops)]
+    acc_mean_majority_acc = [[] for _ in range(loops)]
+    n_samples_record = None
+
+    for s in range(num_seeds):
+        # control RNG for candidate sampling too
+        random.seed(seed + s)
+        np.random.seed(seed + s)
+        base_structure = [
+            {
+                'orig_prompt': extract_question_from_prompt(row['prompt']),
+                'ground_truth': row['reward_model']['ground_truth'],
+                'candidates': None,
+            }
+            for _, row in df.iterrows()
+        ]
+
+        for loop_idx in range(loops):
+            data, metrics = run(llm, tokenizer, sampling, k, population, base_structure)
+            print(metrics)
+            metrics_dict = json.loads(metrics)
+            if n_samples_record is None:
+                n_samples_record = metrics_dict.get("n_samples", None)
+            acc_mean_acc_k[loop_idx].append(metrics_dict["mean_acc_k"])
+            acc_mean_pass_at_k[loop_idx].append(metrics_dict["mean_pass_at_k"])
+            acc_mean_majority_acc[loop_idx].append(metrics_dict["mean_majority_acc"])
+
+    # write aggregated per-loop metrics (lists + mean/std), path unchanged
+    os.makedirs(os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population)), exist_ok=True)
+    metrics_path = os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population), f'eval_loop.json')
+    if os.path.exists(metrics_path):
+        os.remove(metrics_path)
+
+    for loop_idx in range(loops):
+        vals_acc = acc_mean_acc_k[loop_idx]
+        vals_pas = acc_mean_pass_at_k[loop_idx]
+        vals_maj = acc_mean_majority_acc[loop_idx]
+
+        out_entry = {
+            "n_samples": n_samples_record if n_samples_record is not None else 0,
+            "k": k,
+            "population": population,
+            "loop": loop_idx,
+            "n_seeds": num_seeds,
+            "values": {
+                "mean_acc_k": vals_acc,
+                "mean_pass_at_k": vals_pas,
+                "mean_majority_acc": vals_maj
+            },
+            "summary": {
+                "mean_acc_k": {"mean": float(np.mean(vals_acc)), "std": float(np.std(vals_acc, ddof=0))},
+                "mean_pass_at_k": {"mean": float(np.mean(vals_pas)), "std": float(np.std(vals_pas, ddof=0))},
+                "mean_majority_acc": {"mean": float(np.mean(vals_maj)), "std": float(np.std(vals_maj, ddof=0))}
+            }
+        }
+        _append_metrics_to_json(metrics_path, out_entry)
+        print(f"Appended metrics for loop {loop_idx} to {metrics_path}")
 
 def main():
     ap = argparse.ArgumentParser()
@@ -244,13 +282,14 @@ def main():
     ap.add_argument("--dataset", default="/pscratch/sd/s/siddart2/data/aime/train.parquet")
     ap.add_argument("--output", default="/pscratch/sd/s/siddart2/evals/aime/ref")
     ap.add_argument("--k", type=int, default=4)
-    ap.add_argument("--population", type=int, default=8)
+    ap.add_argument("--population", type=int, default=16)
     ap.add_argument("--loops", type=int, default=5)
     ap.add_argument("--max-new-tokens", type=int, default=8192)
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--tp-size", type=int, default=4)
     ap.add_argument("--dtype", default="bfloat16", choices=["auto","float16","bfloat16"])
     ap.add_argument("--seed", type=int, default=1234)
+    ap.add_argument("--num-seeds", type=int, default=4)
     args = ap.parse_args()
 
     loop(
@@ -265,6 +304,7 @@ def main():
         tp_size=args.tp_size,
         dtype=args.dtype,
         seed=args.seed,
+        num_seeds=args.num_seeds,
     )
 
 if __name__ == "__main__":
