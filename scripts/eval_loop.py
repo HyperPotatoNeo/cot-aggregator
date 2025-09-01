@@ -54,22 +54,43 @@ def render_chat_template(tokenizer: AutoTokenizer, prompt: str) -> str:
 
 def aggregate_prompt(question: str, candidate_answers: List[str]) -> str:
     parts = []
-    parts.append(
-        "You are given a math problem and several candidate solutions. "
-        "Some candidates may be incorrect or contain errors. "
-        "Aggregate the useful ideas and produce a single, high-quality solution. "
-        "Reason carefully; if candidates disagree, choose the correct path. If all are incorrect, then attempt a different strategy."#"Be concise and correct; if candidates disagree, choose the correct path. "
-        "End with the final result in \\boxed{{}}.\n"
-    )
+    if len(candidate_answers) == 1:
+        parts.append(
+            "You are given a math problem and a candidate solution. "
+            "The candidate may be incomplete or contain errors. "
+            "Refine this trajectory and produce an improved, higher-quality solution. "
+            "If it is entirely wrong, attempt a new strategy. "
+            "End with the final result in \\boxed{{}}.\n"
+        )
+    else:
+        parts.append(
+            "You are given a math problem and several candidate solutions. "
+            "Some candidates may be incorrect or contain errors. "
+            "Aggregate the useful ideas and produce a single, high-quality solution. "
+            "Reason carefully; if candidates disagree, choose the correct path. If all are incorrect, then attempt a different strategy."
+            "End with the final result in \\boxed{{}}.\n"
+        )
+
     parts.append("Problem:\n")
     parts.append(question.strip() + "\n")
-    parts.append("Candidate solutions (may contain mistakes):\n")
-    for i, ans in enumerate(candidate_answers, 1):
-        ans_str = (ans or "").strip()
-        parts.append(f"---- Solution {i} ----\n{ans_str}\n")
-    parts.append(
-        "Now write a single improved solution. Provide clear reasoning and end with the final answer in \\boxed{{}}."
-    )
+
+    if len(candidate_answers) == 1:
+        parts.append("Candidate solution (may contain mistakes):\n")
+        ans_str = (candidate_answers[0] or "").strip()
+        parts.append(f"---- Candidate ----\n{ans_str}\n")
+        parts.append(
+            "Now refine the candidate into an improved solution. "
+            "Provide clear reasoning and end with the final answer in \\boxed{{}}."
+        )
+    else:
+        parts.append("Candidate solutions (may contain mistakes):\n")
+        for i, ans in enumerate(candidate_answers, 1):
+            ans_str = (ans or "").strip()
+            parts.append(f"---- Solution {i} ----\n{ans_str}\n")
+        parts.append(
+            "Now write a single improved solution. Provide clear reasoning and end with the final answer in \\boxed{{}}."
+        )
+
     return "\n".join(parts)
 
 def build_prompt(tokenizer: AutoTokenizer, question: str, candidate_answers: List[str]):
