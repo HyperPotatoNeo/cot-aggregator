@@ -45,7 +45,7 @@ if __name__ == "__main__":
     # Use mirror repo: DigitalLearningGmbH/MATH-lighteval
     data_source = "nlile/mbpp"
     print(f"Loading the {data_source} dataset from huggingface...", flush=True)
-    dataset = datasets.load_dataset(data_source, trust_remote_code=True)
+    dataset = datasets.load_dataset(data_source)
 
     train_dataset = dataset["train"]
     test_dataset = dataset["test"]
@@ -53,20 +53,23 @@ if __name__ == "__main__":
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
         def process_fn(example, idx):
-            question = example.pop("text")
-            test_cases = example.pop("test_list")
-            challenge_test_cases = example.pop('challenge_test_list')
-            question = "Write a Python function implementation for the following prompt:\n\n" + question + "\n\n" + "Your code should satisfy these tests:\n\n" + '\n'.join(test_cases)
-            data = {
-                "data_source": data_source,
-                "prompt": [{"role": "user", "content": question}],
-                "test_cases": test_cases + challenge_test_cases,
-                "eval_test_cases": challenge_test_cases,
-                "ability": "code",
-                "reward_model": {"style": "code", "test_cases": test_cases},
+            illustrative_tests = '\n'.join(example['test_list'][:3])
+            test_cases = example['test_list'] + example['challenge_test_list']
+            test_cases = [example['test_setup_code'] + "\n" + case for case in test_cases]
+
+            prompt = example["text"] + "\n\n" + "Your code should satisfy these tests:\n\n" + illustrative_tests
+            return {
+                "prompt": [{"role": "user", "content": prompt}],
+                'ground_truth': {
+                    'input_output': {
+                        "inputs": test_cases,
+                        "outputs": [None for _ in test_cases]
+                    },
+                    'eval_type': 'assert',
+                },
+                'code': example['code'],
                 "extra_info": {"split": split, "index": idx},
             }
-            return data
 
         return process_fn
 

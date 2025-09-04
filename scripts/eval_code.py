@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 import argparse, json, math, os, re
 from typing import List, Optional
 import pandas as pd
-from verl.utils.reward_score.code import compute_score
+from verl.utils.reward_score.prime_code import compute_score
 import numpy as np
 import random
 
@@ -165,7 +165,6 @@ def run(
         mean_acc.append(perf_metric['mean_acc'])
         pass_at_k.append(perf_metric['pass_at_k'])
     
-    print(mean_acc)
     metrics = json.dumps(
         {
             "n_samples": len(mean_acc),
@@ -188,7 +187,6 @@ def loop(
     tp_size: int,
     dtype: str,
     seed: int,
-    num_seeds: int,
 ):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     llm = LLM(model=model_name, tensor_parallel_size=tp_size,
@@ -196,79 +194,44 @@ def loop(
     sampling = SamplingParams(
         n=1, temperature=temperature, max_tokens=max_new_tokens
     )
-    df = pd.read_parquet(seed_dataset)
+    df = pd.read_parquet(seed_dataset)[:100]
 
-    # --- seed aggregation (added) ---
-    acc_mean_acc_k = [[] for _ in range(loops)]
-    acc_mean_pass_at_k = [[] for _ in range(loops)]
-    acc_mean_majority_acc = [[] for _ in range(loops)]
-    n_samples_record = None
+    # control RNG for candidate sampling too
+    random.seed(seed)
+    np.random.seed(seed)
 
-    for s in range(num_seeds):
-        # control RNG for candidate sampling too
-        random.seed(seed + s)
-        np.random.seed(seed + s)
-
-        data = [
-            {
-                'orig_prompt': extract_question_from_prompt(row['prompt']),
-                'ground_truth': row['test_cases'],
-                'candidates': None,
-            }
-            for _, row in df.iterrows()
-        ]
-        
-        for loop_idx in range(loops):
-            data, metrics = run(llm, tokenizer, sampling, k, population, data)
-            print(metrics)
-            metrics_dict = json.loads(metrics)
-            if n_samples_record is None:
-                n_samples_record = metrics_dict.get("n_samples", None)
-            acc_mean_acc_k[loop_idx].append(metrics_dict["mean_acc_k"])
-            acc_mean_pass_at_k[loop_idx].append(metrics_dict["mean_pass_at_k"])
-
-    # write aggregated per-loop metrics (lists + mean/std), path unchanged
-    os.makedirs(os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population)), exist_ok=True)
-    metrics_path = os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population), f'eval_loop.json')
-    if os.path.exists(metrics_path):
-        os.remove(metrics_path)
-
-    for loop_idx in range(loops):
-        vals_acc = acc_mean_acc_k[loop_idx]
-        vals_pas = acc_mean_pass_at_k[loop_idx]
-
-        out_entry = {
-            "n_samples": n_samples_record if n_samples_record is not None else 0,
-            "k": k,
-            "population": population,
-            "loop": loop_idx,
-            "n_seeds": num_seeds,
-            "values": {
-                "mean_acc_k": vals_acc,
-                "mean_pass_at_k": vals_pas,
-            },
-            "summary": {
-                "mean_acc_k": {"mean": float(np.mean(vals_acc)), "std": float(np.std(vals_acc, ddof=0))},
-                "mean_pass_at_k": {"mean": float(np.mean(vals_pas)), "std": float(np.std(vals_pas, ddof=0))},
-            }
+    data = [
+        {
+            'orig_prompt': extract_question_from_prompt(row['prompt']),
+            'ground_truth': row['ground_truth'],
+            'candidates': None,
         }
-        _append_metrics_to_json(metrics_path, out_entry)
-        print(f"Appended metrics for loop {loop_idx} to {metrics_path}")
+        for _, row in df.iterrows()
+    ]
+    
+    for loop_idx in range(loops):
+        data, metrics = run(llm, tokenizer, sampling, k, population, data)
+        print(metrics)
+        metrics_dict = json.loads(metrics)
+        metrics_dict['loop'] = loop_idx
+
+        os.makedirs(os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population)), exist_ok=True)
+        metrics_path = os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population), f'{seed}.json')
+        _append_metrics_to_json(metrics_path, metrics_dict)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
-    ap.add_argument("--dataset", default="./data/he/test.parquet")
-    ap.add_argument("--output", default="./data/he/ref")
-    ap.add_argument("--k", type=int, default=4)
-    ap.add_argument("--population", type=int, default=8)
+    ap.add_argument("--dataset", default="./data/lcb/test.parquet")
+    ap.add_argument("--output", default="./data/lcb/evaluation")
+    ap.add_argument("--k", type=int, default=1)
+    ap.add_argument("--population", type=int, default=1)
     ap.add_argument("--loops", type=int, default=5)
-    ap.add_argument("--max-new-tokens", type=int, default=16384)
+    ap.add_argument("--max-new-tokens", type=int, default=8192)
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--tp-size", type=int, default=4)
     ap.add_argument("--dtype", default="bfloat16", choices=["auto","float16","bfloat16"])
     ap.add_argument("--seed", type=int, default=1234)
-    ap.add_argument("--num-seeds", type=int, default=4)
     args = ap.parse_args()
 
     loop(
@@ -283,8 +246,8 @@ def main():
         tp_size=args.tp_size,
         dtype=args.dtype,
         seed=args.seed,
-        num_seeds=args.num_seeds
     )
 
 if __name__ == "__main__":
     main()
+     
