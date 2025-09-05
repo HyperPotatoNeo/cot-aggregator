@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Adapted from https://github.com/EleutherAI/lm-evaluation-harness/blob/main/lm_eval/tasks/hendrycks_math/utils.py
-
+from math_verify import parse, verify
 
 def compute_score(solution_str, ground_truth) -> float:
     retval = 0.0
@@ -30,6 +30,10 @@ def compute_score(solution_str, ground_truth) -> float:
 
 # string normalization from https://github.com/EleutherAI/lm-evaluation-harness/blob/master/lm_eval/tasks/hendrycks_math.py
 def is_equiv(str1, str2, verbose=False):
+    gold = parse(str2)
+    pred = parse(str1)
+    return verify(gold, pred)
+    '''
     if str1 is None and str2 is None:
         print("WARNING: Both None")
         return True
@@ -44,6 +48,7 @@ def is_equiv(str1, str2, verbose=False):
         return ss1 == ss2
     except Exception:
         return str1 == str2
+    '''
 
 
 def remove_boxed(s):
