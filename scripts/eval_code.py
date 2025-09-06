@@ -10,17 +10,135 @@ from verl.utils.reward_score.prime_code import compute_score
 import numpy as np
 import random
 
-instruction_following = ("Please follow the following instructions:\n\n"
-                "- Reason about the problem and any base cases before writing the code.\n"
-                "- You must return the implementation code in the following format:\n"
-                "```python\n"
-                "<CODE GOES HERE>\n"
-                "```\n"
-                # "- You must only return a single code block since we only parse the first code block.\n"
-                "- Do not include any tests in your code - we will run the suite and return any error feedback.\n"
-                "- Include relevant import statements.\n"
-            )
+import datasets
+from tqdm import tqdm
 
+def lcb():
+    import pickle
+    import zlib
+    import base64
+
+    def process_fn(example):
+        prompt = "You will be given a question (problem specification) and will generate a correct Python program that matches the specification and passes all tests.\n\n"
+        prompt += f"Question:\n{example['question_content']}"
+        if len(example['starter_code']):
+            instruction = f"You will use the following starter code to write the solution to the problem and enclose your code within delimiters.\n"
+            instruction += f"```python\n{example['starter_code']}\n```\n\n"
+        else:
+            instruction = f"Read the inputs from stdin solve the problem and write the answer to stdout (do not directly test on the sample inputs). Enclose your code within delimiters as follows. Ensure that when the python program runs, it reads the inputs, runs the algorithm and writes output to STDOUT.\n\n"
+            instruction += f"```python\n# YOUR CODE HERE\n```"
+
+        public_test_cases = json.loads(
+            example.pop('public_test_cases')
+        )
+        private_test_cases = example.pop('private_test_cases')
+        try:
+            private_test_cases = json.loads(private_test_cases)
+        except:
+            private_test_cases = json.loads(
+                pickle.loads(
+                    zlib.decompress(
+                        base64.b64decode(private_test_cases.encode("utf-8"))  # type: ignore
+                    )
+                )
+            )
+        
+        eval_types = ["call" if r['testtype'] == "functional" else "stdio" for r in public_test_cases] + ["call" if r['testtype'] == "functional" else "stdio" for r in private_test_cases]
+        inputs = [r['input'] for r in public_test_cases] + [r['input'] for r in private_test_cases]
+        outputs = [r['output'] for r in public_test_cases] + [r['output'] for r in private_test_cases]
+        metadata = json.loads(example['metadata'])
+
+        assert all(x == eval_types[0] for x in eval_types), "Evaluation is a mix of both!"
+
+        return {
+            "prompt": prompt,
+            'ground_truth': {
+                'eval_type': eval_types[0],
+                "fn_name": metadata.get("func_name", None),
+                'input_output': {
+                    "inputs": inputs,
+                    "outputs": outputs
+                }
+            },
+            "instruction": instruction
+        }
+
+    dataset = datasets.load_dataset("livecodebench/code_generation_lite", version_tag="release_v6", trust_remote_code=True)
+    dataset = dataset["test"]
+    dataset = dataset.sort("question_id")
+
+    data = list()
+
+    for example in tqdm(dataset):
+        data.append(process_fn(example))
+    
+    return data
+
+def mbpp(split='test'):
+    def process_fn(example):
+        illustrative_tests = '\n'.join(example['test_list'][:3])
+        test_cases = example['test_list'] + example['challenge_test_list']
+        test_cases = [example['test_setup_code'] + "\n" + case for case in test_cases]
+
+        instruction = (
+            "Reason about the problem and any base cases before writing the code. "
+            "You must return the implementation code in the following format:\n"
+            "```python\n"
+            "<CODE GOES HERE>\n"
+            "```\n\n"
+        )
+
+        prompt = example["text"] + "\n\n" + "Your code should satisfy these tests:\n\n" + illustrative_tests
+        return {
+            "prompt": prompt,
+            'ground_truth': {
+                'input_output': {
+                    "inputs": test_cases,
+                    "outputs": [None for _ in test_cases]
+                },
+                'eval_type': 'assert',
+            },
+            "instruction": instruction
+        }
+
+    dataset = datasets.load_dataset("nlile/mbpp")[split]
+    data = list()
+
+    for example in tqdm(dataset):
+        data.append(process_fn(example))
+    return data
+
+def he():
+    def process_fn(example):
+        prompt = "You will be given a code outline and will generate a correct Python program that matches the specification and passes all tests.\n\n" + f"```python\n{example['prompt']}\n```\n\n"
+        example['eval_type'] = 'call'
+        instruction = (
+            "Reason about the problem and any base cases before writing the code. "
+            "You must return the implementation code in the following format:\n"
+            "```python\n"
+            "<CODE GOES HERE>\n"
+            "```\n\n"
+        )
+
+        return {
+            "prompt": prompt,
+            'ground_truth': {
+                'eval_type': 'assert',
+                'input_output': {
+                    "inputs": [example['test'] + "\n\n" + "check(" + example['entry_point'] + ')'],
+                    "outputs": [None]
+                }
+            },
+            "instruction": instruction
+        }
+    
+    dataset = datasets.load_dataset("openai/openai_humaneval")['test']
+    data = list()
+
+    for example in tqdm(dataset):
+        data.append(process_fn(example))
+    
+    return data
 
 # --------------------- helpers ---------------------
 def _append_metrics_to_json(path: str, entry: dict):
@@ -69,25 +187,25 @@ def aggregate_prompt(question: str, candidate_answers: List[str]) -> str:
         "Some candidates may be incorrect or contain errors. "
         "Aggregate the useful ideas and produce a single, high-quality solution. "
         "Reason carefully; if candidates disagree, choose the correct path."
-        # "Be concise and correct; if candidates disagree, choose the correct path. "
     )
-    # parts.append("Problem:\n")
     parts.append(question.strip() + "\n")
     parts.append("Candidate solutions (may contain mistakes):\n")
     for i, ans in enumerate(candidate_answers, 1):
         ans_str = (ans or "").strip()
         parts.append(f"---- Solution {i} ----\n{ans_str}\n")
     parts.append(
-        "\nNow provide an improved and correct solution along with its reasoning. " + instruction_following
+        "\nNow provide an improved and correct solution along with its reasoning."
     )
     return "\n".join(parts)
 
-def build_prompt(tokenizer: AutoTokenizer, question: str, candidate_answers: List[str]):
+def build_prompt(tokenizer: AutoTokenizer, question: str, candidate_answers: List[str], instruction: str = None):
     if candidate_answers is not None:
         prompt = aggregate_prompt(question, candidate_answers)
     else:
-        prompt = question + "\n\n" + instruction_following
-        
+        prompt = question
+    
+    prompt += '\n\n' + instruction
+
     return render_chat_template(tokenizer, prompt)
 
 def evaluate_k_answers(k_answers: List[str], gt: str) -> Dict[str, Any]:
@@ -127,10 +245,11 @@ def run(
     for problem in data:
         prompt = problem['orig_prompt']
         ground_truth = problem['ground_truth']
+        instruction = problem['instruction']
         candidate_answers = generate_candidates(problem['candidates'], population, k)
         ground_truths.append(ground_truth)
         for candidates in candidate_answers:
-            request, _ = build_prompt(tokenizer, prompt, candidates)
+            request, _ = build_prompt(tokenizer, prompt, candidates, instruction)
             requests.append(request)
     
     print(requests[0])
@@ -152,12 +271,17 @@ def run(
     mean_acc: List[float] = []
     pass_at_k: List[int] = []
 
-    max_workers = min(48, len(ground_truths))
-    perf_metrics = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for gt, responses in zip(ground_truths, all_responses):
-            args = (responses, gt)
-            perf_metrics.append(executor.submit(evaluate_k_answers, *args))
+    with tqdm(total=len(all_responses)) as pbar:
+        with ProcessPoolExecutor(
+            max_workers=16
+        ) as executor:
+            for gt, responses in zip(ground_truths, all_responses):
+                args = (responses, gt)
+                perf_metrics.append(executor.submit(evaluate_k_answers, *args))
+
+    assert len(perf_metrics) == len(
+        ground_truths
+    ), f"results = {len(perf_metrics)} inputs = {len(ground_truths)}"
 
     perf_metrics = list(perf_metric.result() for perf_metric in perf_metrics)
 
@@ -181,7 +305,6 @@ def loop(
     k: int,
     population: int,
     seed_dataset: str,
-    output_dir: str,
     max_new_tokens: int,
     temperature: float,
     tp_size: int,
@@ -194,7 +317,14 @@ def loop(
     sampling = SamplingParams(
         n=1, temperature=temperature, max_tokens=max_new_tokens
     )
-    df = pd.read_parquet(seed_dataset)[:100]
+    output_dir = f'./data/{seed_dataset}/evaluation'
+
+    if seed_dataset == 'lcb':
+        data = lcb()
+    elif seed_dataset == 'mbpp':
+        data = mbpp()
+    elif seed_dataset == 'he':
+        data = he()
 
     # control RNG for candidate sampling too
     random.seed(seed)
@@ -202,11 +332,12 @@ def loop(
 
     data = [
         {
-            'orig_prompt': extract_question_from_prompt(row['prompt']),
+            'orig_prompt':  row['prompt'],
             'ground_truth': row['ground_truth'],
             'candidates': None,
+            'instruction': row['instruction']
         }
-        for _, row in df.iterrows()
+        for row in data
     ]
     
     for loop_idx in range(loops):
@@ -222,12 +353,11 @@ def loop(
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
-    ap.add_argument("--dataset", default="./data/lcb/test.parquet")
-    ap.add_argument("--output", default="./data/lcb/evaluation")
-    ap.add_argument("--k", type=int, default=1)
-    ap.add_argument("--population", type=int, default=1)
-    ap.add_argument("--loops", type=int, default=5)
-    ap.add_argument("--max-new-tokens", type=int, default=8192)
+    ap.add_argument("--dataset", default="lcb")
+    ap.add_argument("--k", type=int, default=4)
+    ap.add_argument("--population", type=int, default=4)
+    ap.add_argument("--loops", type=int, default=2)
+    ap.add_argument("--max-new-tokens", type=int, default=4096)
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--tp-size", type=int, default=4)
     ap.add_argument("--dtype", default="bfloat16", choices=["auto","float16","bfloat16"])
@@ -238,7 +368,6 @@ def main():
         model_name=args.model,
         loops=args.loops,
         seed_dataset=args.dataset,
-        output_dir=args.output,
         k=args.k,
         population=args.population,
         max_new_tokens=args.max_new_tokens,
@@ -250,4 +379,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-     

@@ -253,7 +253,7 @@ def _ensure_stdio_fileno():
 def compile_code(code: str, timeout: int):
     signal.alarm(timeout)
     try:
-        _ensure_stdio_fileno()
+        # _ensure_stdio_fileno()
         tmp_sol = ModuleType("tmp_sol", "")
         exec(code, tmp_sol.__dict__)
         if "class Solution" in code:
@@ -304,42 +304,43 @@ def grade_call_based(
     if method is None:
         return
 
+    all_inputs = [
+        [json.loads(line) for line in inputs.split("\n")] for inputs in all_inputs
+    ]
+
+    all_outputs = [json.loads(output) for output in all_outputs]
+
     total_execution = 0
     all_results = []
     for idx, (gt_inp, gt_out) in enumerate(zip(all_inputs, all_outputs)):
         signal.alarm(timeout)
         faulthandler.enable()
-        args = parse_args_respecting_double_paren(gt_inp, compiled_sol.__dict__)
-
         try:
             # can lock here so time is useful
             start = time.time()
-            prediction = method(*args)
+            prediction = method(*gt_inp)
             total_execution += time.time() - start
             signal.alarm(0)
-            
-            tmp_result = prediction == eval(gt_out)
-            if not tmp_result:
-                return tmp_result, {
-                "output": truncatefn(prediction),
-                "inputs": truncatefn(gt_inp),
-                "expected": truncatefn(gt_out),
-                "error_code": -2,
-                "error_message": "Wrong Answer",
-            }
+
+            # don't penalize model if it produces tuples instead of lists
+            # ground truth sequences are not tuples
+            if isinstance(prediction, tuple):
+                prediction = list(prediction)
+
+            tmp_result = prediction == gt_out
 
             # handle floating point comparisons
 
             all_results.append(tmp_result)
 
-            # if not tmp_result:
-            #     return all_results, {
-            #         "output": truncatefn(prediction),
-            #         "inputs": truncatefn(gt_inp),
-            #         "expected": truncatefn(gt_out),
-            #         "error_code": -2,
-            #         "error_message": "Wrong Answer",
-            #     }
+            if not tmp_result:
+                return all_results, {
+                    "output": truncatefn(prediction),
+                    "inputs": truncatefn(gt_inp),
+                    "expected": truncatefn(gt_out),
+                    "error_code": -2,
+                    "error_message": "Wrong Answer",
+                }
         except Exception as e:
             signal.alarm(0)
             if "timeoutexception" in repr(e).lower():
@@ -560,17 +561,18 @@ def run_test(sample, test=None, debug=False, timeout=6):
         raise e
         in_outs = None
 
-    if sample.get("eval_type") == 'stdio':
-        which_type = CODE_TYPE.standard_input  # Standard input
-        method_name = None
+    if in_outs:
+        if sample.get("eval_type") == 'stdio':
+            which_type = CODE_TYPE.standard_input  # Standard input
+            method_name = None
 
-    elif sample.get("eval_type") == 'call':
-        which_type = CODE_TYPE.call_based  # Call-based
-        method_name = sample["fn_name"]
+        elif sample.get("eval_type") == 'call':
+            which_type = CODE_TYPE.call_based  # Call-based
+            method_name = sample["fn_name"]
 
-    elif sample.get("eval_type") == 'assert':
-        which_type = CODE_TYPE.assert_based  # Assert-based
-        method_name = None
+        elif sample.get("eval_type") == 'assert':
+            which_type = CODE_TYPE.assert_based  # Assert-based
+            method_name = None
 
     if debug:
         print(f"loaded input_output = {datetime.now().time()}")
