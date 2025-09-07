@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
 from typing import List, Dict, Any
 import argparse, json, math, os, re
@@ -270,6 +270,7 @@ def run(
     # Evaluate
     mean_acc: List[float] = []
     pass_at_k: List[int] = []
+    perf_metrics = list()
 
     with tqdm(total=len(all_responses)) as pbar:
         with ProcessPoolExecutor(

@@ -31,7 +31,6 @@ def compute_score(solution_str, ground_truth, continuous: bool = False) -> float
     if isinstance(ground_truth, str):
         ground_truth = json.load(ground_truth)
     
-    result, metadata = check_correctness(ground_truth, code, 6, False)
     try:
         result, metadata = check_correctness(ground_truth, code, 6, False)
     except Exception as e:
