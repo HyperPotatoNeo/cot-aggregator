@@ -52,6 +52,61 @@ def render_chat_template(tokenizer: AutoTokenizer, prompt: str) -> str:
     chat_message = make_chat_message(prompt)
     return make_chat_prompt(tokenizer, chat_message), chat_message
 
+def summarize_cot_prompt(question: str, candidate: str) -> str:
+    parts = []
+    parts.append(
+        "You are given a math problem and a candidate solution. "
+        "Summarize the solution into a concise chain-of-thought style outline that preserves all "
+        "important information required to continue refinement later: the main approach(es), key steps/equations, "
+        "useful intermediate results, and any mistakes or dead ends. "
+        "Compress it while keeping the essential structure. "
+        "If the candidate included a final answer, retain it at the end in \\boxed{ }.\n"
+    )
+    parts.append("Problem:\n")
+    parts.append(question.strip() + "\n")
+    parts.append("Candidate solution:\n")
+    parts.append(candidate.strip() + "\n")
+    parts.append("Now produce the concise, information-preserving summary. "
+                 "End with the final answer in \\boxed{} if present.")
+    return "\n".join(parts)
+
+def summarize_candidates_inplace(
+    llm: LLM,
+    tokenizer: AutoTokenizer,
+    data: List[dict],
+    max_tokens: int,
+    temperature: float
+) -> None:
+    """
+    For each problem, summarize each candidate individually and replace in place.
+    """
+    requests = []
+    idxs = []  # (problem_idx, candidate_idx)
+    for pi, problem in enumerate(data):
+        question = problem['orig_prompt']
+        cands = problem.get('candidates') or []
+        for ci, cand in enumerate(cands):
+            # Build a chat prompt per candidate
+            prompt = summarize_cot_prompt(question, cand)
+            chat_prompt, _ = render_chat_template(tokenizer, prompt)
+            requests.append(chat_prompt)
+            idxs.append((pi, ci))
+
+    if not requests:
+        return
+
+    summarize_params = SamplingParams(
+        n=1,
+        temperature=temperature,
+        max_tokens=max_tokens
+    )
+    outs = llm.generate(requests, summarize_params)
+    flat = [o.text for out in outs for o in out.outputs]
+
+    # Write summaries back in place
+    for (pi, ci), summary in zip(idxs, flat):
+        data[pi]['candidates'][ci] = summary
+
 def aggregate_prompt(question: str, candidate_answers: List[str]) -> str:
     parts = []
     if len(candidate_answers) == 1:
@@ -220,6 +275,7 @@ def loop(
     loops: int,
     k: int,
     population: int,
+    summarize_cot: bool,
     seed_dataset: str,
     output_dir: str,
     max_new_tokens: int,
@@ -258,7 +314,16 @@ def loop(
 
         for loop_idx in range(loops):
             data, metrics = run(llm, tokenizer, sampling, k, population, base_structure)
-            print(metrics)
+            print(loop_idx, metrics)
+            if summarize_cot and loop_idx < loops - 1:
+                print("Summarizing candidates before aggregation...")
+                summarize_candidates_inplace(
+                    llm=llm,
+                    tokenizer=tokenizer,
+                    data=base_structure,
+                    max_tokens=max_new_tokens,
+                    temperature=temperature
+                )
             metrics_dict = json.loads(metrics)
             if n_samples_record is None:
                 n_samples_record = metrics_dict.get("n_samples", None)
@@ -304,13 +369,14 @@ def main():
     ap.add_argument("--output", default="/pscratch/sd/s/siddart2/evals/aime/ref")
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--population", type=int, default=16)
-    ap.add_argument("--loops", type=int, default=5)
+    ap.add_argument("--loops", type=int, default=10)
     ap.add_argument("--max-new-tokens", type=int, default=8192)
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--tp-size", type=int, default=4)
     ap.add_argument("--dtype", default="bfloat16", choices=["auto","float16","bfloat16"])
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--num-seeds", type=int, default=4)
+    ap.add_argument("--summarize-cot", action="store_true", help="Whether to summarize candidates before aggregation")
     args = ap.parse_args()
 
     loop(
@@ -320,6 +386,7 @@ def main():
         output_dir=args.output,
         k=args.k,
         population=args.population,
+        summarize_cot=args.summarize_cot,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         tp_size=args.tp_size,
