@@ -447,7 +447,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
     ap.add_argument("--dataset", default="/pscratch/sd/m/mokshjn/eval/countdown/countdown_test.parquet")
-    ap.add_argument("--output", default="/pscratch/sd/m/mokshjn/eval/countdown/ref_test")
+    ap.add_argument("--output", default="/pscratch/sd/m/mokshjn/eval/countdown/ref_multiseed")
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--population", type=int, default=16)
     ap.add_argument("--summarize-cot", action="store_true")
