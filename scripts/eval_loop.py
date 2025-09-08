@@ -8,6 +8,9 @@ import pandas as pd
 from verl.utils.reward_score.math import last_boxed_only_string, remove_boxed, is_equiv
 import numpy as np
 import random
+from reasoning_gym.factory import get_score_answer_fn
+from datasets import Dataset
+
 
 # --------------------- helpers ---------------------
 def _append_metrics_to_json(path: str, entry: dict):
@@ -28,6 +31,7 @@ def _append_metrics_to_json(path: str, entry: dict):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
+
 def extract_question_from_prompt(prompt_cell: Any) -> str:
     """
     Supports a list of chat messages like:
@@ -35,6 +39,7 @@ def extract_question_from_prompt(prompt_cell: Any) -> str:
     or a raw string. Returns the first user content when list[dict].
     """
     return prompt_cell[0].get("content", "")
+
 
 def extract_rg_solution(completion: str) -> Optional[str]:
     """Extract the model's predicted answer for reasoning-gym style prompts.
@@ -58,9 +63,10 @@ def extract_rg_solution(completion: str) -> Optional[str]:
 
     return final_response[1].strip()
 
+
 # make sure to include all the possible data sources in the if-else
-def get_task_name(df: pd.DataFrame) -> str:
-    data_source = df['data_source'][0]
+def get_task_name(ds: Dataset) -> str:
+    data_source = ds[0]['data_source']
     if "aime" in data_source or "hmmt" in data_source or "MATH" in data_source or "DeepScaleR" in data_source:
         return "math"
     elif "reasoning_gym" in data_source:
@@ -230,7 +236,7 @@ def evaluate_k_answers_math(k_answers: List[str], gt: str) -> Dict[str, Any]:
     }
 
 
-def evaluate_k_answers_rg(score_answer_fn: Callable[[str, str], float], k_answers: List[str], gt: str) -> Dict[str, Any]:
+def evaluate_k_answers_rg(score_answer_fn: Callable[[str, str], float], k_answers: List[str], gt: dict) -> Dict[str, Any]:
     solutions = [extract_rg_solution(a) or "" for a in k_answers]
 
     ## mean accuracy, pass@k
@@ -287,12 +293,13 @@ def run(
     score_answer_fn: Optional[Callable[[str, str], float]] = None,
 ):
 
-    requests, ground_truths = [], []
+    requests, ground_truths, dataset_names = [], [], []
     for problem in data:
         prompt = problem['orig_prompt']
         ground_truth = problem['gt']
         candidate_answers = generate_candidates(problem['candidates'], population, k)
         ground_truths.append(ground_truth)
+        dataset_names.append(problem['dataset_name'])
         for candidates in candidate_answers:
             request, _ = build_prompt(tokenizer, prompt, candidates, task)
             requests.append(request)
@@ -311,9 +318,9 @@ def run(
     pass_at_k: List[float] = []
     majority_acc: List[float] = []
 
-    for gt, responses in zip(ground_truths, all_responses):
+    for dataset_name, gt, responses in zip(dataset_names, ground_truths, all_responses):
         if task == 'rg':
-            assert score_answer_fn is not None, "score_answer_fn must be provided for task 'rg'"
+            score_answer_fn = get_score_answer_fn(name=dataset_name)
             perf_metric = evaluate_k_answers_rg(score_answer_fn, responses[:], gt)
         else:
             perf_metric = evaluate_k_answers_math(responses[:], gt)
@@ -354,16 +361,13 @@ def loop(
     sampling = SamplingParams(
         n=1, temperature=temperature, max_tokens=max_new_tokens
     )
-    df = pd.read_parquet(seed_dataset)
+    ds = Dataset.from_parquet(seed_dataset)
 
-    # Prepare scorer for RG when needed (lazy import to avoid dep when not used)
+    # Prepare scorer for RG when needed
     score_answer_fn: Optional[Callable[[str, str], float]] = None
-    task = get_task_name(df)
-    if task == 'rg':
-        from reasoning_gym.factory import get_score_answer_fn
-        score_answer_fn = get_score_answer_fn(name=df['extra_info'][0]['dataset_name'])
+    task = get_task_name(ds)
 
-    # --- seed aggregation (applies to both) ---
+    # --- seed aggregation ---
     acc_mean_acc_k = [[] for _ in range(loops)]
     acc_mean_pass_at_k = [[] for _ in range(loops)]
     acc_mean_majority_acc = [[] for _ in range(loops)]
@@ -376,10 +380,11 @@ def loop(
         base_structure = [
             {
                 'orig_prompt': extract_question_from_prompt(row['prompt']),
-                'gt': row['extra_info']['entry'] if task == 'rg' else row['reward_model']['ground_truth'],
+                'dataset_name': (row['extra_info']['dataset_name'] if task == 'rg' else None),
+                'gt': (json.loads(row['extra_info']['entry']) if task == 'rg' else row['reward_model']['ground_truth']),
                 'candidates': None,
             }
-            for _, row in df.iterrows()
+            for row in ds
         ]
 
         for loop_idx in range(loops):
@@ -446,8 +451,8 @@ def loop(
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
-    ap.add_argument("--dataset", default="/pscratch/sd/m/mokshjn/eval/countdown/countdown_test.parquet")
-    ap.add_argument("--output", default="/pscratch/sd/m/mokshjn/eval/countdown/ref_multiseed")
+    ap.add_argument("--dataset", default="/pscratch/sd/m/mokshjn/eval/algorithmic/eval.parquet")
+    ap.add_argument("--output", default="/pscratch/sd/m/mokshjn/eval/algorithmic/ref/")
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--population", type=int, default=16)
     ap.add_argument("--summarize-cot", action="store_true")
