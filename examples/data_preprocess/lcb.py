@@ -23,66 +23,66 @@ import datasets
 
 from verl.utils.hdfs_io import copy, makedirs
 
-instruction_following = ("Please follow the following instructions:\n\n"
-                "- Reason about the problem and any base cases before writing the code.\n"
-                "- You must return the implementation code in the following format:\n"
-                "```python\n"
-                "<CODE GOES HERE>\n"
-                "```\n"
-                # "- You must only return a single code block since we only parse the first code block.\n"
-                "- Do not include any tests in your code - we will run the suite and return any error feedback.\n"
-                "- Include relevant import statements.\n"
-            )
-
-def extract_assert_lines(s: str) -> list[str]:
-    return [line.strip() for line in s.splitlines() if line.strip().startswith("assert")]
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="./data/he")
+    parser.add_argument("--local_dir", default="./data/lcb")
     parser.add_argument("--hdfs_dir", default=None)
 
     args = parser.parse_args()
 
     # 'lighteval/MATH' is no longer available on huggingface.
     # Use mirror repo: DigitalLearningGmbH/MATH-lighteval
-    data_source = "openai/openai_humaneval"
-    print(f"Loading the {data_source} dataset from huggingface...", flush=True)
-    dataset = datasets.load_dataset(data_source, trust_remote_code=True)
+    print(f"Loading the LiveCodeBench dataset from huggingface...", flush=True)
+    dataset = datasets.load_dataset("livecodebench/code_generation_lite", version_tag="release_v6")
+    dataset = dataset.filter(lambda example: example['public_test_cases'] != '[]')
+    dataset = dataset.map(remove_columns=['private_test_cases', 'platform', 'question_title', 'contest_date', 'difficulty'])
 
-    # train_dataset = dataset["train"]
     test_dataset = dataset["test"]
 
     # add a row to each data item that represents a unique id
     def make_map_fn(split):
         def process_fn(example, idx):
-            example['eval_type'] = 'call'
+            public_test_cases = json.loads(
+                example['public_test_cases']
+            )
+            private_test_cases = json.loads(
+                pickle.loads(
+                    zlib.decompress(
+                        base64.b64decode(example['private_test_cases'].encode("utf-8"))  # type: ignore
+                    )
+                )
+            )
+            eval_types = ["call" if r['testtype'] == "functional" else "stdio" for r in public_test_cases] + ["call" if r['testtype'] == "functional" else "stdio" for r in private_test_cases]
+            inputs = [r['input'] for r in public_test_cases] + [r['input'] for r in private_test_cases]
+            outputs = [r['output'] for r in public_test_cases] + [r['output'] for r in private_test_cases] 
+            metadata = json.loads(example['metadata'])
+
+            assert all(x == eval_types[0] for x in eval_types), "Evaluation is a mix of both!"
+
+            if len(example['starter_code']):
+                example['question_content'] += '\n\n' + example['starter_code']
             return {
-                "prompt": [{"role": "user", "content": example['prompt']}],
-                'code': example['prompt'] + example['canonical_solution'],
+                "prompt": [{"role": "user", "content": example['question_content']}],
+                'code': None,
                 'ground_truth': {
-                    'eval_type': 'assert',
+                    'eval_type': eval_types[0],
+                    "fn_name": metadata.get("func_name", None),
                     'input_output': {
-                        "inputs": [example['test'] + "\n\n" + "check(" + example['entry_point'] + ')'],
-                        "outputs": [None]
+                        "inputs": inputs,
+                        "outputs": outputs
                     }
                 }
             }
 
         return process_fn
 
-    # train_dataset = train_dataset.map(function=make_map_fn("train"), with_indices=True)
     test_dataset = test_dataset.map(function=make_map_fn("test"), with_indices=True)
-
+    print(test_dataset)
     local_dir = os.path.expanduser(args.local_dir)
     hdfs_dir = args.hdfs_dir
 
-    # train_dataset.to_parquet(os.path.join(local_dir, "train.parquet"))
     test_dataset.to_parquet(os.path.join(local_dir, "test.parquet"))
     # Save one example as JSON for reference
-    # example = train_dataset[0]
-    # with open(os.path.join(local_dir, "train_example.json"), "w") as f:
-        # json.dump(example, f, indent=2)
     example = test_dataset[0]
     with open(os.path.join(local_dir, "test_example.json"), "w") as f:
         json.dump(example, f, indent=2)
