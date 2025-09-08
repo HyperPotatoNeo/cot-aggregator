@@ -14,6 +14,7 @@ module load gcc
 module load opencv/4.12.0
 module load rust
 conda activate verl
+source .venv/bin/activate
 
 model=$1
 data=$2
@@ -23,4 +24,4 @@ T=$5
 seed=$6
 
 export TOKENIZERS_PARALLELISM=false
-python scripts/eval_code.py --k $K --population $N --loops $T --dataset $data --model $model --seed $seed
+python scripts/eval_loop_gpt.py --model $model --k $K --population $N --loops $T --dataset ./data/$data/train.parquet --output ./evaluation/$data --seed $seed

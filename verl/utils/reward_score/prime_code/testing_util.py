@@ -253,7 +253,7 @@ def _ensure_stdio_fileno():
 def compile_code(code: str, timeout: int):
     signal.alarm(timeout)
     try:
-        # _ensure_stdio_fileno()
+        _ensure_stdio_fileno()
         tmp_sol = ModuleType("tmp_sol", "")
         exec(code, tmp_sol.__dict__)
         if "class Solution" in code:

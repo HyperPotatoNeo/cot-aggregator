@@ -1,17 +1,24 @@
 #!/bin/bash
 
-for seed in {1234..1254}; do
-    sbatch --time=12:0:0 run.sh 16 4 10 $seed
+for seed in {1234..1237}; do
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 aime25 1 1 10 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 hmmt25 1 1 10 $seed
+
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 aime25 1 40 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 hmmt25 1 40 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 aime25 1 80 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 hmmt25 1 80 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 aime25 1 160 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 hmmt25 1 160 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 aime25 1 320 1 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen3-4B-Instruct-2507 hmmt25 1 320 1 $seed
+
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen2.5-3B-Instruct math 4 32 10 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen2.5-7B-Instruct math 4 32 10 $seed
+    # sbatch --time=3:0:0 run_math.sh Qwen/Qwen2.5-32B-Instruct math 4 32 10 $seed
+    sbatch --time=9:0:0 run_math_thinking.sh Qwen/Qwen3-4B-Thinking-2507 aime25 4 32 10 $seed
+    sbatch --time=9:0:0 run_math_thinking.sh Qwen/Qwen3-4B-Thinking-2507 hmmt25 4 32 10 $seed
+    # sbatch --time=3:0:0 run_math_gpt.sh openai/gpt-oss-20b hmmt25 4 32 10 $seed
+    # sbatch --time=12:0:0 run_math.sh Qwen/Qwen3-30B-A3B-Instruct-2507 aime25 4 32 10 $seed
+    # sbatch --time=12:0:0 run_math.sh Qwen/Qwen3-30B-A3B-Thinking-2507 aime25 4 32 10 $seed
 done
-
-# for seed in 1234 1235 1236 1237 1238; do
-#     for k in 1 2 3 4 5 6; do
-#         sbatch --time=12:0:0 run.sh 32 $k 5 $seed
-#     done
-
-#     for n in 4 6 8 16 32; do
-#         sbatch --time=12:0:0 run.sh $n 4 5 $seed
-#     done
-
-#     sbatch --time=12:0:0 run.sh 64 4 10 $seed
-# done

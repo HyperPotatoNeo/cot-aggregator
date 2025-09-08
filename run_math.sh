@@ -23,4 +23,4 @@ T=$5
 seed=$6
 
 export TOKENIZERS_PARALLELISM=false
-python scripts/eval_code.py --k $K --population $N --loops $T --dataset $data --model $model --seed $seed
+python scripts/eval_loop.py --model $model --k $K --population $N --loops $T --dataset ./data/$data/train.parquet --output ./evaluation/$data --seed $seed

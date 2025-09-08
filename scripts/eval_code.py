@@ -274,7 +274,7 @@ def run(
 
     with tqdm(total=len(all_responses)) as pbar:
         with ProcessPoolExecutor(
-            max_workers=16
+            max_workers=48
         ) as executor:
             for gt, responses in zip(ground_truths, all_responses):
                 args = (responses, gt)
@@ -318,7 +318,7 @@ def loop(
     sampling = SamplingParams(
         n=1, temperature=temperature, max_tokens=max_new_tokens
     )
-    output_dir = f'./data/{seed_dataset}/evaluation'
+    output_dir = f'./evaluation/{seed_dataset}/'
 
     if seed_dataset == 'lcb':
         data = lcb()
