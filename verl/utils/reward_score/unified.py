@@ -25,6 +25,10 @@ def get_task_name(data_source: str) -> str:
 
 # --------------------- math ---------------------
 def is_equiv(str1, str2, verbose=False):
+    if '$' not in str1:
+        str1 = '$' + str1 + '$'
+    if '$' not in str2:
+        str2 = '$' + str2 + '$'
     gold = parse(str2)
     pred = parse(str1)
     return verify(gold, pred)
