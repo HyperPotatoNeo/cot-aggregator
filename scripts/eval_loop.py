@@ -71,6 +71,8 @@ def get_task_name(ds: Dataset) -> str:
         return "math"
     elif "reasoning_gym" in data_source:
         return "rg"
+    elif "m-a-p/SuperGPQA" in data_source:
+        return 'supergpqa'
     else:
         raise ValueError(f"Unknown task: {data_source}")
 
@@ -87,6 +89,9 @@ def aggregate_prompt(question: str, candidate_answers: List[str], task: str) -> 
     if task == 'rg':
         problem_kind = 'problem'
         format_hint = '<answer>...</answer>'
+    elif task == 'supergqpa':
+        problem_kind = 'multiple-choice problem'
+        format_hint = '\\boxed{}. Only include the correct option letter in \\boxed{}; for example \\boxed{A}'
     else:
         problem_kind = 'math problem'
         format_hint = '\\boxed{}'
@@ -323,7 +328,7 @@ def run(
             score_answer_fn = get_score_answer_fn(name=dataset_name)
             perf_metric = evaluate_k_answers_rg(score_answer_fn, responses[:], gt)
         else:
-            perf_metric = evaluate_k_answers_math(responses[:], gt)
+            perf_metric = evaluate_k_answers_math(responses[:], gt) # Also works for supergpqa
         mean_acc.append(perf_metric['mean_acc'])
         pass_at_k.append(perf_metric['pass_at_k'])
         majority_acc.append(perf_metric['majority_vote_correct'])
