@@ -16,6 +16,7 @@ def get_task_name(data_source: str) -> str:
         or ("hmmt" in data_source)
         or ("MATH" in data_source)
         or ("DeepScaleR" in data_source)
+        or ("agentica-org/DeepScaleR-Preview-Dataset" in data_source)
     ):
         return "math"
     if "reasoning_gym" in data_source:
