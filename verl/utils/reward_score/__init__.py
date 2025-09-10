@@ -40,7 +40,12 @@ def default_compute_score(
     Raises:
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
-    if data_source == "openai/gsm8k":
+    if True:
+        from . import unified
+
+        res = unified.compute_score(data_source, solution_str, ground_truth, extra_info)
+
+    elif data_source == "openai/gsm8k":
         from . import gsm8k
 
         res = gsm8k.compute_score(solution_str, ground_truth)
@@ -102,6 +107,10 @@ def default_compute_score(
 
         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
 
+    elif data_source in ["reasoning_gym"]:
+        from . import reasoning_gym
+
+        res = reasoning_gym.compute_score(solution_str, extra_info)
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
