@@ -163,6 +163,21 @@ def summarize_cot_prompt(question: str, candidate: str) -> str:
                  "End with the final answer in \\boxed{} if present.")
     return "\n".join(parts)
 
+def verify_cot_prompt(question: str, candidate: str) -> str:
+    parts = []
+    parts.append(
+        "You are given a problem and a candidate solution. "
+        "Verify whether the candidate solution is correct. "
+        "If the solution is correct, output only True. "
+        "If it is incorrect, output only False.  "
+        "Do not generate anything else. "
+    )
+    parts.append("Problem:\n")
+    parts.append(question.strip() + "\n")
+    parts.append("Candidate solution:\n")
+    parts.append(candidate.strip() + "\n")
+    parts.append("Now verify if the solution is True or False. Only output \"True\" or \"False\".")
+    return "\n".join(parts)
 
 def summarize_candidates_inplace(
     llm: LLM,
@@ -203,6 +218,44 @@ def summarize_candidates_inplace(
 
 
 # --------------------- evaluation ---------------------
+def verify_candidates(
+    llm: LLM,
+    tokenizer: AutoTokenizer,
+    data: List[dict],
+) -> None:
+    """
+    For each problem, verify each candidate individually and compute mean accuracy among True candidates. If all are False, compute mean acc.
+    """
+    requests = []
+    idxs = []  # (problem_idx, candidate_idx)
+    for pi, problem in enumerate(data):
+        question = problem['orig_prompt']
+        cands = problem.get('candidates') or []
+        for ci, cand in enumerate(cands):
+            # Build a chat prompt per candidate
+            prompt = verify_cot_prompt(question, cand)
+            chat_prompt, _ = render_chat_template(tokenizer, prompt)
+            requests.append(chat_prompt)
+            idxs.append((pi, ci))
+
+    if not requests:
+        return
+
+    summarize_params = SamplingParams(
+        n=1,
+        temperature=0.1,#temperature,
+        max_tokens=10,
+    )
+    outs = llm.generate(requests, summarize_params)
+    all_responses = [o.text for out in outs for o in out.outputs]
+    verified_vals = [
+        1 if (m := re.findall(r'(true|false)', s, flags=re.I)) and m[-1].lower() == "true"
+        else 0
+        for s in all_responses
+    ]
+    return verified_vals
+
+
 def evaluate_k_answers_math(k_answers: List[str], gt: str) -> Dict[str, Any]:
     solutions = [
         (last_boxed_only_string(a) if last_boxed_only_string(a) is not None else "\\boxed{}")
@@ -295,6 +348,7 @@ def run(
     population: int,
     data: List,
     task: str,
+    self_verify: bool,
     score_answer_fn: Optional[Callable[[str, str], float]] = None,
 ):
 
@@ -317,11 +371,17 @@ def run(
     for problem, responses in zip(data, all_responses):
         problem['candidates'] = responses
 
+    if self_verify:
+        verified_vals = verify_candidates(llm, tokenizer, data)
+        verified_vals = reshape_list(verified_vals, population)
+
     # Evaluate
     pred_accuracies: List[List[float]] = []
     mean_acc: List[float] = []
     pass_at_k: List[float] = []
     majority_acc: List[float] = []
+    verified_score_list: List[float] = []
+    verified_mean_score = 0.0
 
     for dataset_name, gt, responses in zip(dataset_names, ground_truths, all_responses):
         if task == 'rg':
@@ -332,6 +392,24 @@ def run(
         mean_acc.append(perf_metric['mean_acc'])
         pass_at_k.append(perf_metric['pass_at_k'])
         majority_acc.append(perf_metric['majority_vote_correct'])
+
+    if self_verify:
+        for dataset_name, gt, responses, verified in zip(dataset_names, ground_truths, all_responses, verified_vals):
+            if task == 'rg':
+                score_answer_fn = get_score_answer_fn(name=dataset_name)
+                solutions = [extract_rg_solution(a) or "" for a in responses[:]]
+                scores = [float(score_answer_fn(sol, gt)) for sol in solutions]
+            else:
+                solutions = [
+                    (last_boxed_only_string(a) if last_boxed_only_string(a) is not None else "\\boxed{}")
+                    for a in responses
+                ]
+                extracted = [remove_boxed(s) for s in solutions]
+                scores = [float(is_equiv(e, gt)) for e in extracted]
+                verified_score = sum([x*y for x,y in zip(scores, verified)]) / max(1, sum(verified))
+                verified_score_list.append(verified_score)
+        verified_mean_score = sum(verified_score_list) / max(1, len(verified_score_list))
+
     
     metrics = json.dumps(
         {
@@ -340,6 +418,7 @@ def run(
             "mean_acc_k": sum(mean_acc) / max(1, len(mean_acc)),
             "mean_pass_at_k": sum(pass_at_k) / max(1, len(pass_at_k)),
             "mean_majority_acc": sum(majority_acc) / max(1, len(majority_acc)),
+            "self_verified_acc": verified_mean_score
         }, indent=2
     )
     return data, metrics
@@ -351,6 +430,7 @@ def loop(
     k: int,
     population: int,
     summarize_cot: bool,
+    self_verify: bool,
     seed_dataset: str,
     output_dir: str,
     max_new_tokens: int,
@@ -376,6 +456,7 @@ def loop(
     acc_mean_acc_k = [[] for _ in range(loops)]
     acc_mean_pass_at_k = [[] for _ in range(loops)]
     acc_mean_majority_acc = [[] for _ in range(loops)]
+    acc_mean_self_verify = [[] for _ in range(loops)]
     n_samples_record = None
 
     for s in range(num_seeds):
@@ -402,6 +483,7 @@ def loop(
                 data=base_structure,
                 task=task,
                 score_answer_fn=score_answer_fn,
+                self_verify=self_verify
             )
             print(loop_idx, metrics)
             if summarize_cot and loop_idx < loops - 1:
@@ -419,6 +501,7 @@ def loop(
             acc_mean_acc_k[loop_idx].append(metrics_dict["mean_acc_k"])
             acc_mean_pass_at_k[loop_idx].append(metrics_dict["mean_pass_at_k"])
             acc_mean_majority_acc[loop_idx].append(metrics_dict["mean_majority_acc"])
+            acc_mean_self_verify[loop_idx].append(metrics_dict["self_verified_acc"])
 
     # write aggregated per-loop metrics (lists + mean/std), path unchanged
     os.makedirs(os.path.join(output_dir,'k_'+str(k)+'_N_'+str(population)), exist_ok=True)
@@ -430,6 +513,7 @@ def loop(
         vals_acc = acc_mean_acc_k[loop_idx]
         vals_pas = acc_mean_pass_at_k[loop_idx]
         vals_maj = acc_mean_majority_acc[loop_idx]
+        vals_verify = acc_mean_self_verify[loop_idx]
 
         out_entry = {
             "n_samples": n_samples_record if n_samples_record is not None else 0,
@@ -441,12 +525,14 @@ def loop(
             "values": {
                 "mean_acc_k": vals_acc,
                 "mean_pass_at_k": vals_pas,
-                "mean_majority_acc": vals_maj
+                "mean_majority_acc": vals_maj,
+                "self_verified_acc": vals_verify
             },
             "summary": {
                 "mean_acc_k": {"mean": float(np.mean(vals_acc)), "std": float(np.std(vals_acc, ddof=0))},
                 "mean_pass_at_k": {"mean": float(np.mean(vals_pas)), "std": float(np.std(vals_pas, ddof=0))},
-                "mean_majority_acc": {"mean": float(np.mean(vals_maj)), "std": float(np.std(vals_maj, ddof=0))}
+                "mean_majority_acc": {"mean": float(np.mean(vals_maj)), "std": float(np.std(vals_maj, ddof=0))},
+                "self_verified_acc": {"mean": float(np.mean(vals_verify)), "std": float(np.std(vals_verify, ddof=0))}
             }
         }
         _append_metrics_to_json(metrics_path, out_entry)
@@ -461,6 +547,7 @@ def main():
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--population", type=int, default=16)
     ap.add_argument("--summarize-cot", action="store_true")
+    ap.add_argument("--self-verify", action="store_true")
     ap.add_argument("--loops", type=int, default=10)
     ap.add_argument("--max-new-tokens", type=int, default=8192)
     ap.add_argument("--temperature", type=float, default=1.0)
@@ -478,6 +565,7 @@ def main():
         k=args.k,
         population=args.population,
         summarize_cot=args.summarize_cot,
+        self_verify=args.self_verify,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         tp_size=args.tp_size,
