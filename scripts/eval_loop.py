@@ -406,8 +406,8 @@ def run(
                 ]
                 extracted = [remove_boxed(s) for s in solutions]
                 scores = [float(is_equiv(e, gt)) for e in extracted]
-                verified_score = sum([x*y for x,y in zip(scores, verified)]) / max(1, sum(verified))
-                verified_score_list.append(verified_score)
+            verified_score = sum([x*y for x,y in zip(scores, verified)]) / max(1, sum(verified))
+            verified_score_list.append(verified_score)
         verified_mean_score = sum(verified_score_list) / max(1, len(verified_score_list))
 
     
