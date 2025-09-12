@@ -30,6 +30,11 @@ def compute_score(solution_str, ground_truth) -> float:
 
 # string normalization from https://github.com/EleutherAI/lm-evaluation-harness/blob/master/lm_eval/tasks/hendrycks_math.py
 def is_equiv(str1, str2, verbose=False):
+    if '$' not in str1:
+        str1 = '$' + str1 + '$'
+    if '$' not in str2:
+        str2 = '$' + str2 + '$'
+
     gold = parse(str2)
     pred = parse(str1)
     return verify(gold, pred)
@@ -319,16 +324,28 @@ def get_task_name(df: pd.DataFrame) -> str:
 
 # --------------------- prompt building ---------------------
 def render_chat_template(tokenizer: AutoTokenizer, prompt: str, reasoning) -> str:
-    convo = Conversation.from_messages(
-    [
-        Message.from_role_and_content(Role.SYSTEM, SystemContent.new().with_reasoning_effort(reasoning)),
-        # Message.from_role_and_content(
-        #     Role.DEVELOPER,
-        #     DeveloperContent.new().with_instructions("Solve the following math problem."),
-        # ),
-        Message.from_role_and_content(Role.USER, prompt),
-    ]
-    )
+    if reasoning is None:
+        convo = Conversation.from_messages(
+        [
+            Message.from_role_and_content(Role.SYSTEM, SystemContent.new()),
+            Message.from_role_and_content(
+                Role.DEVELOPER,
+                DeveloperContent.new().with_instructions("Solve the following math problem."),
+            ),
+            Message.from_role_and_content(Role.USER, prompt),
+        ]
+        )
+    else:
+        convo = Conversation.from_messages(
+        [
+            Message.from_role_and_content(Role.SYSTEM, SystemContent.new().with_reasoning_effort(reasoning)),
+            # Message.from_role_and_content(
+            #     Role.DEVELOPER,
+            #     DeveloperContent.new().with_instructions("Solve the following math problem."),
+            # ),
+            Message.from_role_and_content(Role.USER, prompt),
+        ]
+        )
 
     prefill_ids = encoding.render_conversation_for_completion(convo, Role.ASSISTANT)
     return prefill_ids
@@ -634,6 +651,8 @@ def loop(
         reasoning = ReasoningEffort.MEDIUM
     elif reasoning == 'high':
         reasoning = ReasoningEffort.HIGH
+    else:
+        reasoning = None
 
     # Prepare scorer for RG when needed (lazy import to avoid dep when not used)
     score_answer_fn: Optional[Callable[[str, str], float]] = None
@@ -643,9 +662,6 @@ def loop(
         score_answer_fn = get_score_answer_fn(name=df['extra_info'][0]['dataset_name'])
 
     # --- seed aggregation (applies to both) ---
-    acc_mean_acc_k = [[] for _ in range(loops)]
-    acc_mean_pass_at_k = [[] for _ in range(loops)]
-    acc_mean_majority_acc = [[] for _ in range(loops)]
     n_samples_record = None
 
     # control RNG for candidate sampling too
@@ -676,6 +692,7 @@ def loop(
             data=base_structure,
             task=task,
             score_answer_fn=score_answer_fn,
+            reasoning=reasoning
         )
         print(loop_idx, metrics)
         if summarize_cot and loop_idx < loops - 1:
