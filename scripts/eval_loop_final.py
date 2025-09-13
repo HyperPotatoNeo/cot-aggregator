@@ -679,7 +679,6 @@ def main():
     ap.add_argument("--k", type=int, default=4)
     ap.add_argument("--population", type=int, default=16)
     ap.add_argument("--summarize-cot", action="store_true")
-    ap.add_argument("--self-verify", action="store_true")
     ap.add_argument("--loops", type=int, default=10)
     ap.add_argument("--max-new-tokens", type=int, default=8192)
     ap.add_argument("--temperature", type=float, default=1.0)
