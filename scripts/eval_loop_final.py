@@ -320,17 +320,20 @@ def verify_candidates(
             max_tokens=10,
             stop_token_ids=stop_token_ids
         )
+        print(tokenizer.decode(requests[0]))
+        outs = llm.generate(prompt_token_ids=requests, sampling_params=summarize_params)
     else:
         summarize_params = SamplingParams(
             n=1,
             temperature=0.1,#temperature,
             max_tokens=10,
         )
-    if prompt_token_ids:
-        outs = llm.generate(prompt_token_ids=requests, sampling_params=summarize_params)
-    else:
+        print(requests[0])
         outs = llm.generate(requests, sampling_params=summarize_params)
+
     all_responses = [o.text for out in outs for o in out.outputs]
+
+    print(all_responses[0])
     verified_vals = [
         1 if (m := re.findall(r'(true|false)', s, flags=re.I)) and m[-1].lower() == "true"
         else 0
@@ -381,7 +384,15 @@ def evaluate_k_answers_rg(score_answer_fn: Callable[[str, str], float], k_answer
     solutions = [extract_rg_solution(a) or "" for a in k_answers]
 
     ## mean accuracy, pass@k
-    scores = [float(score_answer_fn(sol, gt)) for sol in solutions]
+
+    scores = []
+    for sol in solutions:
+        try:
+            scores.append(score_answer_fn(sol, gt))
+        except:
+            scores.append(0)
+
+    # scores = [float(score_answer_fn(sol, gt)) for sol in solutions]
     mean_acc = float(sum(scores) / max(1, len(scores)))
     pass_at_k = float(1.0 if any(s == 1.0 for s in scores) else 0.0)
 
@@ -479,11 +490,11 @@ def run(
         verified_vals = reshape_list(verified_vals, population)
 
     # Evaluate
-    pred_accuracies: List[List[float]] = []
     mean_acc: List[float] = []
     pass_at_k: List[float] = []
     majority_acc: List[float] = []
     verified_score_list: List[float] = []
+    correct_bools = []
 
     for dataset_name, gt, responses in zip(dataset_names, ground_truths, all_responses):
         if task == 'rg':
@@ -494,6 +505,7 @@ def run(
         mean_acc.append(perf_metric['mean_acc'])
         pass_at_k.append(perf_metric['pass_at_k'])
         majority_acc.append(perf_metric['majority_vote_correct'])
+        correct_bools.append(perf_metric['pred_accuracies'])
 
     if self_verify:
         for dataset_name, gt, responses, verified in zip(dataset_names, ground_truths, all_responses, verified_vals):
@@ -548,8 +560,13 @@ def loop(
     self_verify: bool,
 ):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    llm = LLM(model=model_name, tensor_parallel_size=tp_size,
-                  dtype=dtype, trust_remote_code=True, seed=seed)
+    if 'nemo' in model_name:
+        llm = LLM(model=model_name, tensor_parallel_size=tp_size,
+                    dtype=dtype, trust_remote_code=True, seed=seed,
+                    mamba_ssm_cache_dtype='float32')
+    else:
+        llm = LLM(model=model_name, tensor_parallel_size=tp_size,
+                    dtype=dtype, trust_remote_code=True, seed=seed)
     if 'gpt' in model_name:
         sampling = SamplingParams(
             n=1, temperature=temperature, max_tokens=max_new_tokens, stop_token_ids=stop_token_ids
@@ -618,7 +635,7 @@ def loop(
         ]
         start_loop_idx = -1
 
-    for loop_idx in range(loops):
+    for loop_idx in range(start_loop_idx + 1, loops):
         data, metrics = run(
             llm=llm,
             tokenizer=tokenizer,
@@ -695,7 +712,7 @@ def main():
         model_name=args.model,
         loops=args.loops,
         seed_dataset=args.dataset,
-        output_dir=args.output,
+        output_dir=os.path.join(args.output, args.model.split('/')[-1]),
         k=args.k,
         population=args.population,
         summarize_cot=args.summarize_cot,
