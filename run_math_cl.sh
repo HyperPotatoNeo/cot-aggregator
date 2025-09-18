@@ -17,10 +17,8 @@ conda activate verl
 
 model=$1
 data=$2
-K=$3
-N=$4
-T=$5
-seed=$6
+seed=$3
+tokens=$4
 
 export TOKENIZERS_PARALLELISM=false
-python scripts/eval_loop_final.py --model $model --k $K --population $N --loops $T --dataset ./data/$data/train.parquet --output ./evaluation/$data --seed $seed --self_verify --max-new-tokens 32768
+python scripts/eval_loop_cl.py --model $model --k 4 --population 16 --loops 10 --dataset ./data/$data/train.parquet --output ./context-length_evaluation/$data --seed $seed --max-new-tokens $tokens

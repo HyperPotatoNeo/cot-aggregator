@@ -13,7 +13,7 @@ module load arrow/18.1.0
 module load gcc
 module load opencv/4.12.0
 module load rust
-conda activate verl
+conda activate rsa
 
 model=$1
 data=$2
@@ -23,4 +23,4 @@ T=$5
 seed=$6
 
 export TOKENIZERS_PARALLELISM=false
-python scripts/eval_loop.py --model $model --k $K --population $N --loops $T --dataset ./data/$data/train.parquet --output ./evaluation/$data --seed $seed
+python scripts/eval_loop_final.py --model $model --k $K --population $N --loops $T --dataset ./data/$data/train.parquet --output ./evaluation/$data --seed $seed --self_verify --resume

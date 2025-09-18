@@ -13,7 +13,8 @@ module load arrow/18.1.0
 module load gcc
 module load opencv/4.12.0
 module load rust
-conda activate verl
+conda activate rsa
+source nemo/bin/activate
 
 model=$1
 data=$2
@@ -21,6 +22,7 @@ K=$3
 N=$4
 T=$5
 seed=$6
+tokens=$7
 
 export TOKENIZERS_PARALLELISM=false
-python scripts/eval_loop_final.py --model $model --k $K --population $N --loops $T --dataset ./data/$data/train.parquet --output ./evaluation/$data --seed $seed --self_verify --max-new-tokens 32768
+python scripts/eval_code.py --k $K --population $N --loops $T --dataset $data --model $model --seed $seed --resume --output ./evaluation/$data --max-new-tokens $tokens

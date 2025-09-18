@@ -21,6 +21,7 @@ K=$3
 N=$4
 T=$5
 seed=$6
+tokens=$7
 
 export TOKENIZERS_PARALLELISM=false
-python scripts/eval_code.py --k $K --population $N --loops $T --dataset $data --model $model --seed $seed
+python scripts/eval_code.py --k $K --population $N --loops $T --dataset $data --model $model --seed $seed --resume --output ./evaluation/$data --max-new-tokens $tokens --self_verify
