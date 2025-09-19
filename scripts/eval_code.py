@@ -206,7 +206,7 @@ def make_chat_prompt(tokenizer: AutoTokenizer, messages: list[Dict]) -> str:
 
 def render_chat_template(tokenizer: AutoTokenizer, prompt: str) -> str:
     chat_message = make_chat_message(prompt)
-    return make_chat_prompt(tokenizer, chat_message), chat_message
+    return make_chat_prompt(tokenizer, chat_message)
 
 def aggregate_prompt(question: str, candidate_answers: List[str]) -> str:
     parts = []
@@ -279,10 +279,9 @@ def verify_candidates(
         n=1,
         temperature=0.1,#temperature,
         max_tokens=10,
-        stop_token_ids=stop_token_ids
     )
-    print(tokenizer.decode(requests[0]))
-    outs = llm.generate(prompt_token_ids=requests, sampling_params=verify_params)
+    print(requests[0])
+    outs = llm.generate(requests, sampling_params=verify_params)
     all_responses = [o.text for out in outs for o in out.outputs]
     print(all_responses[0])
     verified_vals = [
@@ -334,7 +333,7 @@ def run(
         candidate_answers = generate_candidates(problem['candidates'], population, k)
         ground_truths.append(ground_truth)
         for candidates in candidate_answers:
-            request, _ = build_prompt(tokenizer, prompt, candidates, instruction)
+            request = build_prompt(tokenizer, prompt, candidates, instruction)
             requests.append(request)
     
     print(requests[0])
@@ -481,7 +480,7 @@ def loop(
             for row in data
         ]
         start_loop_idx = -1
-    
+            
     for loop_idx in range(start_loop_idx + 1, loops):
         data, metrics = run(
             llm=llm,

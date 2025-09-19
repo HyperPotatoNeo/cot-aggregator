@@ -2,34 +2,19 @@ from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
-from typing import List, Optional, Callable, Dict, Any
+from typing import List, Dict, Any
 import argparse, json, math, os, re
 from typing import List, Optional
 import pandas as pd
 from rewards.code import compute_score
 import numpy as np
 import random
-from functools import partial
 
 import datasets
 from tqdm import tqdm
 import pickle
 
 from pathlib import Path
-from openai_harmony import (
-    HarmonyEncodingName,
-    load_harmony_encoding,
-    Conversation,
-    Message,
-    Role,
-    SystemContent,
-    DeveloperContent,
-    ReasoningEffort
-)
-import shutil
-
-encoding = load_harmony_encoding(HarmonyEncodingName.HARMONY_GPT_OSS)
-stop_token_ids = encoding.stop_tokens_for_assistant_actions()
 
 def load_latest_loop_file(dir_path):
     dir_path = Path(dir_path)
@@ -210,46 +195,29 @@ def extract_question_from_prompt(prompt_cell: Any) -> str:
     """
     return prompt_cell[0].get("content", "")
 
+def make_chat_message(question: str) -> str:
+    messages = [
+        {"role": "user", "content": question},
+    ]
+    return messages
+
+def make_chat_prompt(tokenizer: AutoTokenizer, messages: list[Dict]) -> str:
+    return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
 def render_chat_template(tokenizer: AutoTokenizer, prompt: str) -> str:
-    chat_message = [
-        {"role": "user", "content": prompt},
-    ]
-    return tokenizer.apply_chat_template(chat_message, tokenize=False, add_generation_prompt=True)
-
-def render_chat_template_gpt(tokenizer: AutoTokenizer, prompt: str, reasoning) -> str:
-    convo = Conversation.from_messages(
-    [
-        Message.from_role_and_content(Role.SYSTEM, SystemContent.new().with_reasoning_effort(reasoning)),
-        Message.from_role_and_content(Role.USER, prompt),
-    ]
-    )
-
-    prefill_ids = encoding.render_conversation_for_completion(convo, Role.ASSISTANT)
-    return prefill_ids
+    chat_message = make_chat_message(prompt)
+    return make_chat_prompt(tokenizer, chat_message)
 
 def aggregate_prompt(question: str, candidate_answers: List[str]) -> str:
     parts = []
-    if len(candidate_answers) == 1:
-        parts.append(
-            "You are given a python code implementation problem and a candidate code block with its reasoning. "
-            "The candidate may be incorrect or contain errors. "
-            "Refine this trajectory and produce a single, high-quality solution. "
-            "Reason carefully; if it is entirely wrong, attempt a new strategy."
-        )
-    else:
-        parts.append(
-            "You are given a python code implementation problem and several candidate code blocks with their reasoning. "
-            "Some candidates may be incorrect or contain errors. "
-            "Aggregate the useful ideas and produce a single, high-quality solution. "
-            "Reason carefully; if candidates disagree, choose the correct path."
-        )
+    parts.append(
+        "You are given a python code implementation problem and several candidate code blocks with their reasoning. "
+        "Some candidates may be incorrect or contain errors. "
+        "Aggregate the useful ideas and produce a single, high-quality solution. "
+        "Reason carefully; if candidates disagree, choose the correct path."
+    )
     parts.append(question.strip() + "\n")
-
-    if len(candidate_answers) == 1:
-        parts.append("Candidate solution (may contain mistakes):\n")
-    else:
-        parts.append("Candidate solutions (may contain mistakes):\n")
-
+    parts.append("Candidate solutions (may contain mistakes):\n")
     for i, ans in enumerate(candidate_answers, 1):
         ans_str = (ans or "").strip()
         parts.append(f"---- Solution {i} ----\n{ans_str}\n")
@@ -274,22 +242,20 @@ def verify_cot_prompt(question: str, candidate: str) -> str:
     parts.append("Now verify if the solution is True or False. Only output \"True\" or \"False\".")
     return "\n".join(parts)
 
-def build_prompt(tokenizer: AutoTokenizer, question: str, candidate_answers: Optional[List[str]], instruction: str, chat_template_fn: Callable[[AutoTokenizer, str], List]):
+def build_prompt(tokenizer: AutoTokenizer, question: str, candidate_answers: List[str], instruction: str = None):
     if candidate_answers is not None:
         prompt = aggregate_prompt(question, candidate_answers)
     else:
         prompt = question
-
+    
     prompt += '\n\n' + instruction
-    return chat_template_fn(tokenizer, prompt)
 
-# --------------------- evaluation ---------------------
+    return render_chat_template(tokenizer, prompt)
+
 def verify_candidates(
     llm: LLM,
     tokenizer: AutoTokenizer,
     data: List[dict],
-    chat_template_fn: Callable[[AutoTokenizer, str], List],
-    prompt_token_ids: bool = False,    
 ) -> None:
     """
     For each problem, verify each candidate individually and compute mean accuracy among True candidates. If all are False, compute mean acc.
@@ -302,33 +268,21 @@ def verify_candidates(
         for ci, cand in enumerate(cands):
             # Build a chat prompt per candidate
             prompt = verify_cot_prompt(question, cand)
-            chat_prompt = chat_template_fn(tokenizer, prompt)
+            chat_prompt = render_chat_template(tokenizer, prompt)
             requests.append(chat_prompt)
             idxs.append((pi, ci))
 
     if not requests:
         return
 
-    if prompt_token_ids:
-        verify_params = SamplingParams(
-            n=1,
-            temperature=0.1,#temperature,
-            max_tokens=10,
-            stop_token_ids=stop_token_ids
-        )
-        print(tokenizer.decode(requests[0]))
-        outs = llm.generate(prompt_token_ids=requests, sampling_params=verify_params)
-    else:
-        verify_params = SamplingParams(
-            n=1,
-            temperature=0.1,#temperature,
-            max_tokens=10,
-        )
-        print(requests[0])
-        outs = llm.generate(requests, sampling_params=verify_params)
-
+    verify_params = SamplingParams(
+        n=1,
+        temperature=0.1,#temperature,
+        max_tokens=10,
+    )
+    print(requests[0])
+    outs = llm.generate(requests, sampling_params=verify_params)
     all_responses = [o.text for out in outs for o in out.outputs]
-
     print(all_responses[0])
     verified_vals = [
         1 if (m := re.findall(r'(true|false)', s, flags=re.I)) and m[-1].lower() == "true"
@@ -336,7 +290,6 @@ def verify_candidates(
         for s in all_responses
     ]
     return verified_vals
-
 
 def evaluate_k_answers(k_answers: List[str], gt: str) -> Dict[str, Any]:
     """
@@ -370,8 +323,6 @@ def run(
     population: int,
     data: List,
     self_verify: bool,
-    chat_template_fn: Callable[[AutoTokenizer, str], List],
-    prompt_token_ids: bool = False,
 ):
 
     requests, ground_truths = [], []
@@ -382,16 +333,11 @@ def run(
         candidate_answers = generate_candidates(problem['candidates'], population, k)
         ground_truths.append(ground_truth)
         for candidates in candidate_answers:
-            request = build_prompt(tokenizer, prompt, candidates, instruction, chat_template_fn=chat_template_fn)
+            request = build_prompt(tokenizer, prompt, candidates, instruction)
             requests.append(request)
     
-    if prompt_token_ids:
-        print(tokenizer.decode(requests[0]))
-        outs = llm.generate(prompt_token_ids=requests, sampling_params=sampling)
-    else:
-        print(requests[0])
-        outs = llm.generate(requests, sampling_params=sampling)
-    
+    print(requests[0])
+    outs = llm.generate(requests, sampling)
     all_responses = [o.text for out in outs for o in out.outputs]
     print(all_responses[0])
 
@@ -411,8 +357,6 @@ def run(
                 llm, 
                 tokenizer, 
                 data,
-                chat_template_fn=chat_template_fn,
-                prompt_token_ids=prompt_token_ids
             )
         verified_vals = reshape_list(verified_vals, population)
 
@@ -474,13 +418,10 @@ def loop(
     tp_size: int,
     dtype: str,
     seed: int,
-    resume: bool,
-    remove_checkpoint: bool,
-    reasoning: str,
     self_verify: bool,
+    resume: bool = False,
 ):
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-
     if 'nemo' in model_name:
         llm = LLM(model=model_name, tensor_parallel_size=tp_size,
                     dtype=dtype, trust_remote_code=True, seed=seed,
@@ -488,28 +429,10 @@ def loop(
     else:
         llm = LLM(model=model_name, tensor_parallel_size=tp_size,
                     dtype=dtype, trust_remote_code=True, seed=seed)
-    if 'gpt' in model_name:
-        sampling = SamplingParams(
-            n=1, temperature=temperature, max_tokens=max_new_tokens, stop_token_ids=stop_token_ids
-        )
-    else:
-        sampling = SamplingParams(
-            n=1, temperature=temperature, max_tokens=max_new_tokens
-        )
 
-    if 'gpt' in model_name:
-        if reasoning == 'low':
-            reasoning = ReasoningEffort.LOW
-        elif reasoning == 'medium':
-            reasoning = ReasoningEffort.MEDIUM
-        elif reasoning == 'high':
-            reasoning = ReasoningEffort.HIGH
-        else:
-            reasoning = None
-
-        chat_template_fn = partial(render_chat_template_gpt, reasoning=reasoning)
-    else:
-        chat_template_fn = render_chat_template
+    sampling = SamplingParams(
+        n=1, temperature=temperature, max_tokens=max_new_tokens
+    )
 
     # write aggregated per-loop metrics (lists + mean/std), path unchanged
     os.makedirs(output_dir, exist_ok=True)
@@ -534,7 +457,6 @@ def loop(
     if resume:
         try:
             data, start_loop_idx, _ = load_latest_loop_file(checkpoints_path)
-            print(f'Starting Inference from Loop: {start_loop_idx + 1}')
         except:
             print(f'Checkpoint not found; defaulting to base')
             data = [
@@ -558,7 +480,7 @@ def loop(
             for row in data
         ]
         start_loop_idx = -1
-    
+            
     for loop_idx in range(start_loop_idx + 1, loops):
         data, metrics = run(
             llm=llm,
@@ -568,8 +490,6 @@ def loop(
             population=population,
             data=data,
             self_verify=self_verify,
-            chat_template_fn=chat_template_fn,
-            prompt_token_ids=True if 'gpt' in model_name else False
         )
         with open(os.path.join(checkpoints_path,f'loop_{loop_idx}.pkl'), 'wb') as file:
             pickle.dump(data, file)
@@ -593,9 +513,6 @@ def loop(
         _append_metrics_to_json(metrics_path, out_entry)
         print(f"Appended metrics for loop {loop_idx} to {metrics_path}")
 
-    if remove_checkpoint:
-        shutil.rmtree(checkpoints_path)
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3-4B-Instruct-2507")
@@ -610,9 +527,7 @@ def main():
     ap.add_argument("--dtype", default="bfloat16", choices=["auto","float16","bfloat16"])
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--resume", action='store_true', default=False)
-    ap.add_argument("--remove_checkpoint", action='store_true', default=False)
     ap.add_argument("--self_verify", action='store_true', default=False)
-    ap.add_argument("--reasoning", default="medium")
     args = ap.parse_args()
 
     loop(
@@ -628,9 +543,7 @@ def main():
         dtype=args.dtype,
         seed=args.seed,
         resume=args.resume,
-        remove_checkpoint=args.remove_checkpoint,
         self_verify=args.self_verify,
-        reasoning=args.reasoning
     )
 
 if __name__ == "__main__":
